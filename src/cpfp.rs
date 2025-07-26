@@ -114,7 +114,7 @@ pub async fn run_demo() -> Result<()> {
     
     // Child spends the 1 BTC output from parent
     let child_send_amount = 0.99; // Send 0.99 BTC
-    let child_fee = 0.01; // 0.01 BTC fee (100x higher than parent!)
+    let child_fee = 0.001; // 0.01 BTC fee (100x higher than parent!)
     
     println!("   ├─ Input: Parent's {} BTC output ({}:0)", parent_send_amount, parent_txid);
     println!("   ├─ Output: {} BTC to final address", child_send_amount);

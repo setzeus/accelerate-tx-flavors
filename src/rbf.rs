@@ -1,3 +1,4 @@
+#![allow(unused_doc_comments)]
 use anyhow::Result;
 use bitcoin::Amount;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
@@ -6,6 +7,9 @@ use std::collections::HashMap;
 pub async fn run_demo() -> Result<()> {
     println!("🚀 RBF Demo - REAL Replace-by-Fee\n");
 
+    /////////////////////
+    /// Initial Setup ///
+    /////////////////////
     // Connect to regtest bitcoind (without wallet first)
     let rpc_base = Client::new("http://127.0.0.1:18443", Auth::UserPass("user".to_string(), "pass".to_string()))?;
     
@@ -62,7 +66,9 @@ pub async fn run_demo() -> Result<()> {
 
     println!("💡 Will send {} BTC (0.001 fee), then {} BTC (0.01 fee)\n", send_amount, replacement_amount);
 
-    // === STEP 1: Create Original Transaction (Low Fee, RBF Enabled) ===
+    /////////////////////////
+    /// First Transaction ///
+    /////////////////////////
     println!("📝 STEP 1: Creating original transaction");
     println!("   ├─ UTXO: {}:{}", utxo.txid, utxo.vout);
     println!("   ├─ Send: {} BTC (small fee)", send_amount);
@@ -73,7 +79,7 @@ pub async fn run_demo() -> Result<()> {
     let inputs = vec![bitcoincore_rpc::json::CreateRawTransactionInput {
         txid: utxo.txid,
         vout: utxo.vout,
-        sequence: Some(0xfffffffd), // RBF enabled!
+        sequence: Some(0xfffffffd), // RBF enabled! Note: this likely *isn't* needed anymore
     }];
 
     let mut outputs = HashMap::new();
@@ -100,7 +106,9 @@ pub async fn run_demo() -> Result<()> {
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
 
-    // === STEP 2: Create REPLACEMENT Transaction (SAME UTXO, Higher Fee) ===
+    //////////////////////////
+    /// Second Transaction ///
+    //////////////////////////
     println!("📝 STEP 2: Creating REPLACEMENT transaction");
     println!("   ├─ SAME UTXO: {}:{}", utxo.txid, utxo.vout);
     println!("   ├─ Send: {} BTC (higher fee)", replacement_amount);
