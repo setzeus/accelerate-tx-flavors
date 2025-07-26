@@ -37,7 +37,7 @@ pub async fn run_demo() -> Result<()> {
     let balance = rpc.get_balance(None, None)?;
     if balance.to_btc() < 10.0 {
         println!("⛏️  Mining blocks for funding...");
-        rpc.generate_to_address(10, &funding_addr.clone().assume_checked())?;
+        rpc.generate_to_address(101, &funding_addr.clone().assume_checked())?;
         let new_balance = rpc.get_balance(None, None)?;
         println!("   └─ Balance: {} BTC\n", new_balance);
     } else {
@@ -48,7 +48,7 @@ pub async fn run_demo() -> Result<()> {
     let unspent = rpc.list_unspent(None, None, None, None, None)?;
     if unspent.is_empty() {
         println!("❌ No UTXOs available, mining more blocks...");
-        rpc.generate_to_address(5, &funding_addr.clone().assume_checked())?;
+        rpc.generate_to_address(100, &funding_addr.clone().assume_checked())?;
         return Ok(());
     }
 
