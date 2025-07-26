@@ -15,7 +15,7 @@ pub async fn run_demo() -> Result<()> {
     println!("   └─ Chain: {}, Blocks: {}\n", blockchain_info.chain, blockchain_info.blocks);
 
     // Try to load existing wallet or create new one
-    let wallet_name = "rbf_demo_wallet"; // Use same wallet as RBF demo
+    let wallet_name = "rbf_demo_wallet";
     match rpc_base.load_wallet(wallet_name) {
         Ok(_) => println!("💼 Loaded existing wallet"),
         Err(_) => {
@@ -30,15 +30,15 @@ pub async fn run_demo() -> Result<()> {
     let rpc = Client::new(&format!("http://127.0.0.1:18443/wallet/{}", wallet_name), Auth::UserPass("user".to_string(), "pass".to_string()))?;
 
     // Get addresses
-    let funding_addr = rpc.get_new_address(None, None)?;
-    let intermediate_addr = rpc.get_new_address(None, None)?; // For parent tx output
-    let final_addr = rpc.get_new_address(None, None)?; // For child tx output
+    let funding_addr = rpc.get_new_address(None, None)?.assume_checked();
+    let intermediate_addr = rpc.get_new_address(None, None)?.assume_checked();
+    let final_addr = rpc.get_new_address(None, None)?.assume_checked();
     
     // Fund wallet if needed
     let balance = rpc.get_balance(None, None)?;
     if balance.to_btc() < 10.0 {
         println!("⛏️  Mining blocks for funding...");
-        rpc.generate_to_address(101, &funding_addr.clone().assume_checked())?;
+        rpc.generate_to_address(101, &funding_addr)?;
         let new_balance = rpc.get_balance(None, None)?;
         println!("   └─ Balance: {} BTC\n", new_balance);
     } else {
@@ -47,9 +47,9 @@ pub async fn run_demo() -> Result<()> {
 
     // Get a UTXO to create our parent transaction
     let unspent = rpc.list_unspent(None, None, None, None, None)?;
-    if unspent.is_empty() {
-        println!("❌ No UTXOs available, mining more blocks...");
-        rpc.generate_to_address(100, &funding_addr.clone().assume_checked())?;
+    if unspent.is_empty() || unspent[0].amount.to_btc() < 1.0 {
+        println!("❌ Need larger UTXOs, mining more blocks...");
+        rpc.generate_to_address(100, &funding_addr)?;
         return Ok(());
     }
 
@@ -61,13 +61,11 @@ pub async fn run_demo() -> Result<()> {
     
     // Calculate amounts based on actual UTXO
     let utxo_amount = utxo.amount.to_btc();
-    let parent_send_amount = 1.0; // Send exactly 1 BTC
     let parent_fee = 0.0001; // Very small fee
-    let parent_change = ((utxo_amount - parent_send_amount - parent_fee) * 100_000_000.0).round() / 100_000_000.0; // Round to 8 decimal places
+    let parent_send_amount = utxo_amount - parent_fee;
 
     println!("   ├─ Input: {}:{} ({} BTC)", utxo.txid, utxo.vout, utxo_amount);
     println!("   ├─ Output: {} BTC to intermediate address", parent_send_amount);
-    println!("   ├─ Change: {} BTC back to wallet", parent_change);
     println!("   ├─ Fee: {} BTC (VERY LOW)", parent_fee);
     println!("   └─ RBF: DISABLED (can't be replaced)\n");
 
@@ -79,10 +77,7 @@ pub async fn run_demo() -> Result<()> {
     }];
 
     let mut parent_outputs = HashMap::new();
-    parent_outputs.insert(intermediate_addr.clone().assume_checked().to_string(), Amount::from_btc(parent_send_amount)?);
-    if parent_change > 0.0 {
-        parent_outputs.insert(funding_addr.clone().assume_checked().to_string(), Amount::from_btc(parent_change)?);
-    }
+    parent_outputs.insert(intermediate_addr.to_string(), Amount::from_btc(parent_send_amount)?);
 
     // Create and sign parent transaction
     let parent_raw = rpc.create_raw_transaction(&parent_inputs, &parent_outputs, None, Some(false))?;
@@ -111,11 +106,11 @@ pub async fn run_demo() -> Result<()> {
 
     // === STEP 2: Create Child Transaction (High Fee) ===
     println!("📝 STEP 2: Creating CHILD transaction with HIGH fee");
-    
-    // Child spends the 1 BTC output from parent
-    let child_send_amount = 0.99; // Send 0.99 BTC
-    let child_fee = 0.001; // 0.01 BTC fee (100x higher than parent!)
-    
+
+    // Child spends ALL of the parent output minus a high fee
+    let child_fee = 0.01; // High fee for acceleration
+    let child_send_amount = ((parent_send_amount - child_fee) * 100_000_000.0).round() / 100_000_000.0; // Round to 8 decimals
+
     println!("   ├─ Input: Parent's {} BTC output ({}:0)", parent_send_amount, parent_txid);
     println!("   ├─ Output: {} BTC to final address", child_send_amount);
     println!("   ├─ Fee: {} BTC (100x HIGHER than parent!)", child_fee);
@@ -124,12 +119,12 @@ pub async fn run_demo() -> Result<()> {
     // Create child transaction
     let child_inputs = vec![bitcoincore_rpc::json::CreateRawTransactionInput {
         txid: parent_txid,
-        vout: 0, // First output of parent (the 1 BTC to intermediate_addr)
+        vout: 0, // Spend the parent's output
         sequence: Some(0xfffffffe),
     }];
 
     let mut child_outputs = HashMap::new();
-    child_outputs.insert(final_addr.clone().assume_checked().to_string(), Amount::from_btc(child_send_amount)?);
+    child_outputs.insert(final_addr.to_string(), Amount::from_btc(child_send_amount)?);
 
     // Create and sign child transaction
     let child_raw = rpc.create_raw_transaction(&child_inputs, &child_outputs, None, None)?;
@@ -171,7 +166,7 @@ pub async fn run_demo() -> Result<()> {
     std::io::stdin().read_line(&mut input)?;
 
     println!("⛏️  Mining block...");
-    let blocks = rpc.generate_to_address(1, &funding_addr.clone().assume_checked())?;
+    let blocks = rpc.generate_to_address(1, &funding_addr)?;
     
     // Check what actually got confirmed
     let block = rpc.get_block(&blocks[0])?;

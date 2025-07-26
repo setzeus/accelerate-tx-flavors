@@ -3,7 +3,6 @@ use bitcoin::{Amount, Transaction, TxOut, TxIn, OutPoint, Witness, Sequence};
 use bitcoin::script::{Builder, PushBytesBuf, ScriptBuf};
 use bitcoin::opcodes::all::OP_PUSHNUM_1;
 use bitcoincore_rpc::{Auth, Client, RpcApi};
-use std::collections::HashMap;
 
 pub async fn run_demo() -> Result<()> {
     println!("🚀 P2A Demo - Ephemeral Anchors\n");
@@ -31,15 +30,15 @@ pub async fn run_demo() -> Result<()> {
     // Connect to the specific wallet
     let rpc = Client::new(&format!("http://127.0.0.1:18443/wallet/{}", wallet_name), Auth::UserPass("user".to_string(), "pass".to_string()))?;
 
-    // Get addresses
-    let funding_addr = rpc.get_new_address(None, None)?;
-    let target_addr = rpc.get_new_address(None, None)?;
+    // Get addresses - FIXED: Remove .clone()
+    let funding_addr = rpc.get_new_address(None, None)?.assume_checked();
+    let target_addr = rpc.get_new_address(None, None)?.assume_checked();
     
     // Fund wallet if needed
     let balance = rpc.get_balance(None, None)?;
     if balance.to_btc() < 10.0 {
         println!("⛏️  Mining blocks for funding...");
-        rpc.generate_to_address(101, &funding_addr.clone().assume_checked())?;
+        rpc.generate_to_address(101, &funding_addr)?;
         let new_balance = rpc.get_balance(None, None)?;
         println!("   └─ Balance: {} BTC\n", new_balance);
     } else {
@@ -48,9 +47,9 @@ pub async fn run_demo() -> Result<()> {
 
     // Get a UTXO
     let unspent = rpc.list_unspent(None, None, None, None, None)?;
-    if unspent.is_empty() {
-        println!("❌ No UTXOs available, mining more blocks...");
-        rpc.generate_to_address(100, &funding_addr.clone().assume_checked())?;
+    if unspent.is_empty() || unspent[0].amount.to_btc() < 1.0 {
+        println!("❌ Need larger UTXOs, mining more blocks...");
+        rpc.generate_to_address(100, &funding_addr)?;
         return Ok(());
     }
 
@@ -60,7 +59,7 @@ pub async fn run_demo() -> Result<()> {
     // === STEP 1: Create Transaction with P2A Anchor ===
     println!("\n📝 STEP 1: Creating transaction with P2A anchor");
     println!("   ├─ Regular transaction output");
-    println!("   ├─ Plus: anchor output (minimal dust value)");
+    println!("   ├─ Plus: anchor output (0 value - true ephemeral!)");
     println!("   ├─ P2A script: OP_1 <0x4e73>");
     println!("   └─ Fee: VERY LOW (will get stuck)\n");
 
@@ -77,29 +76,17 @@ pub async fn run_demo() -> Result<()> {
     println!("   ├─ Length: {} bytes", p2a_script.len());
     println!("   └─ Anyone-can-spend: ✅\n");
 
-    // Calculate amounts - ensure we have enough for fee
+    // Calculate amounts - SIMPLIFIED
     let utxo_amount = utxo.amount.to_btc();
-    let fee_amount = 0.001; // Small fee for parent (anchor will accelerate)
-    let send_amount = ((utxo_amount - fee_amount - 0.001) * 100_000_000.0).round() / 100_000_000.0; // Leave room for fee + small change
-    let change_amount = ((utxo_amount - send_amount - fee_amount) * 100_000_000.0).round() / 100_000_000.0;
+    let fee_amount = 0.001; // Small fee for parent
+    let send_amount = ((utxo_amount - fee_amount) * 100_000_000.0).round() / 100_000_000.0;
+    let anchor_amount = 0.0; // TRUE ephemeral anchor - 0 value!
 
-    // Build transaction manually (like your other demos do with RPC)
-    let tx_inputs = vec![bitcoincore_rpc::json::CreateRawTransactionInput {
-        txid: utxo.txid,
-        vout: utxo.vout,
-        sequence: Some(0xffffffff), // No RBF
-    }];
+    println!("💡 Transaction breakdown:");
+    println!("   ├─ Send: {} BTC to target", send_amount);
+    println!("   ├─ Anchor: {} sats (TRUE ephemeral!)", (anchor_amount * 100_000_000.0) as u64);
+    println!("   └─ Fee: {} BTC (low)", fee_amount);
 
-    // Create transaction outputs (without anchor first)
-    let mut tx_outputs = HashMap::new();
-    tx_outputs.insert(target_addr.clone().assume_checked().to_string(), Amount::from_btc(send_amount)?);
-    if change_amount > 0.0 {
-        tx_outputs.insert(funding_addr.clone().assume_checked().to_string(), Amount::from_btc(change_amount)?);
-    }
-
-    // Create base transaction using RPC (for reference only)
-    let _base_raw_tx = rpc.create_raw_transaction(&tx_inputs, &tx_outputs, None, None)?;
-    
     // Now manually build the transaction with the anchor
     let tx_input = TxIn {
         previous_output: OutPoint::new(utxo.txid, utxo.vout),
@@ -111,20 +98,13 @@ pub async fn run_demo() -> Result<()> {
     let mut tx_outputs_vec = vec![
         TxOut {
             value: Amount::from_btc(send_amount)?,
-            script_pubkey: target_addr.clone().assume_checked().script_pubkey(),
+            script_pubkey: target_addr.script_pubkey(),
         }
     ];
 
-    if change_amount > 0.0 {
-        tx_outputs_vec.push(TxOut {
-            value: Amount::from_btc(change_amount)?,
-            script_pubkey: funding_addr.clone().assume_checked().script_pubkey(),
-        });
-    }
-
     // Add the ephemeral anchor output (0 value for v3 transactions)
     let anchor_output = TxOut {
-        value: Amount::from_sat(0), // ZERO value - true ephemeral!
+        value: Amount::from_sat(0), // ZERO value - true ephemeral anchor!
         script_pubkey: p2a_script.clone(),
     };
     tx_outputs_vec.push(anchor_output);
@@ -143,10 +123,9 @@ pub async fn run_demo() -> Result<()> {
     let main_txid = rpc.send_raw_transaction(&signed_tx.hex)?;
 
     println!("✅ Transaction with P2A anchor broadcasted: {}", main_txid);
-    println!("   ├─ Sends: {} BTC to target", send_amount);
-    println!("   ├─ Change: {} BTC back to wallet", change_amount);
+    println!("   ├─ Sends: {} BTC to target (main output)", send_amount);
     println!("   ├─ Fee: {} BTC (minimal - anchor will accelerate)", fee_amount);
-    println!("   ├─ Anchor: 0 sats (true ephemeral!)");
+    println!("   └─ Anchor: 0 sats (TRUE ephemeral anchor!)");
 
     // Check mempool
     let mempool = rpc.get_raw_mempool()?;
@@ -164,35 +143,28 @@ pub async fn run_demo() -> Result<()> {
 
     // === STEP 2: Create Anchor Spend Transaction ===
     println!("📝 STEP 2: Spending the P2A anchor to add fees");
-    println!("   ├─ Spends the minimal-value anchor output");
+    println!("   ├─ Spends the 0-value anchor output");
     println!("   ├─ Adds external UTXO for fees");
     println!("   ├─ High fee to accelerate main transaction");
     println!("   └─ Anyone can do this (no signature needed for anchor)\n");
 
     // Get another UTXO for fee payment
-    let fee_utxo = &unspent[1.min(unspent.len() - 1)];
+    if unspent.len() < 2 {
+        println!("❌ Need more UTXOs, mining some...");
+        rpc.generate_to_address(10, &funding_addr)?;
+        return Ok(());
+    }
+
+    let fee_utxo = &unspent[1];
     let fee_utxo_amount = fee_utxo.amount.to_btc();
     let high_fee = 0.01; // High fee for acceleration
-    let fee_change = ((fee_utxo_amount - high_fee) * 100_000_000.0).round() / 100_000_000.0;
+    let fee_change = fee_utxo_amount - high_fee;
 
-    // Create anchor spend transaction inputs (for reference only)
-    let _anchor_inputs = vec![
-        // Spend the ephemeral anchor (0 value)
-        bitcoincore_rpc::json::CreateRawTransactionInput {
-            txid: main_txid,
-            vout: (tx.output.len() - 1) as u32, // Last output is the anchor
-            sequence: Some(0xfffffffe),
-        },
-        // Add fee-paying UTXO
-        bitcoincore_rpc::json::CreateRawTransactionInput {
-            txid: fee_utxo.txid,
-            vout: fee_utxo.vout,
-            sequence: Some(0xfffffffe),
-        },
-    ];
-
-    // Create anchor spend outputs (for reference only)
-    let _anchor_outputs:HashMap<String, Amount> = HashMap::new();
+    println!("💡 Anchor spend breakdown:");
+    println!("   ├─ Anchor input: 0 sats (TRUE ephemeral anchor)");
+    println!("   ├─ Fee UTXO input: {} BTC", fee_utxo_amount);
+    println!("   ├─ Output: {} BTC", fee_change);
+    println!("   └─ Fee: {} BTC (HIGH!)", high_fee);
 
     // Create anchor spend transaction manually (v3 required to spend from v3)
     let anchor_tx_input = TxIn {
@@ -213,7 +185,7 @@ pub async fn run_demo() -> Result<()> {
     if fee_change > 0.001 {
         anchor_tx_outputs_vec.push(TxOut {
             value: Amount::from_btc(fee_change)?,
-            script_pubkey: funding_addr.clone().assume_checked().script_pubkey(),
+            script_pubkey: funding_addr.script_pubkey(),
         });
     }
 
@@ -230,7 +202,7 @@ pub async fn run_demo() -> Result<()> {
     let anchor_txid = rpc.send_raw_transaction(&signed_anchor.hex)?;
 
     println!("✅ Anchor spend transaction broadcasted: {}", anchor_txid);
-    println!("   ├─ Spends: Ephemeral anchor (0 value)");
+    println!("   ├─ Spends: Ephemeral anchor (0 sats - TRUE ephemeral!)");
     println!("   ├─ Spends: Fee UTXO ({} BTC)", fee_utxo_amount);
     println!("   ├─ Fee: {} BTC (HIGH!)", high_fee);
     println!("   └─ Change: {} BTC", fee_change);
@@ -264,7 +236,7 @@ pub async fn run_demo() -> Result<()> {
     std::io::stdin().read_line(&mut input)?;
 
     println!("⛏️  Mining block...");
-    let blocks = rpc.generate_to_address(1, &funding_addr.clone().assume_checked())?;
+    let blocks = rpc.generate_to_address(1, &funding_addr)?;
     
     // Check confirmations
     let block = rpc.get_block(&blocks[0])?;
@@ -285,17 +257,17 @@ pub async fn run_demo() -> Result<()> {
     }
 
     println!("\n📚 What we demonstrated:");
-    println!("   ├─ Created transaction with P2A anchor (minimal dust)");
+    println!("   ├─ Created v3 transaction with 0-value P2A anchor");
     println!("   ├─ Main transaction had low fees");
     println!("   ├─ Spent the anchor with high fees to accelerate");
     println!("   ├─ Both transactions mined together");
-    println!("   └─ Anyone can spend P2A anchors (concept demo)");
+    println!("   └─ True ephemeral anchor demo!");
 
     println!("\n💡 Key P2A Benefits:");
-    println!("   ├─ Minimal anchors enable fee acceleration");
+    println!("   ├─ 0-value anchors enable fee acceleration");
     println!("   ├─ Anyone can accelerate stuck transactions");
     println!("   ├─ More efficient than traditional CPFP");
-    println!("   ├─ Demonstrates concept (true ephemeral needs v3 tx)");
+    println!("   ├─ True ephemeral anchors with v3 transactions");
     println!("   └─ Enables new transaction fee patterns");
 
     Ok(())

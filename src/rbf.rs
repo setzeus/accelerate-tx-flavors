@@ -34,14 +34,14 @@ pub async fn run_demo() -> Result<()> {
     let rpc = Client::new(&format!("http://127.0.0.1:18443/wallet/{}", wallet_name), Auth::UserPass("user".to_string(), "pass".to_string()))?;
 
     // Get addresses
-    let target_addr = rpc.get_new_address(None, None)?;
-    let funding_addr = rpc.get_new_address(None, None)?;
+    let target_addr = rpc.get_new_address(None, None)?.assume_checked();
+    let funding_addr = rpc.get_new_address(None, None)?.assume_checked();
     
     // Fund wallet if needed
     let balance = rpc.get_balance(None, None)?;
     if balance.to_btc() < 10.0 {
         println!("⛏️  Mining blocks for funding...");
-        rpc.generate_to_address(101, &funding_addr.clone().assume_checked())?;
+        rpc.generate_to_address(101, &funding_addr)?;
         let new_balance = rpc.get_balance(None, None)?;
         println!("   └─ Balance: {} BTC\n", new_balance);
     } else {
@@ -50,9 +50,9 @@ pub async fn run_demo() -> Result<()> {
 
     // Get a specific UTXO to spend (for true RBF)
     let unspent = rpc.list_unspent(None, None, None, None, None)?;
-    if unspent.is_empty() {
-        println!("❌ No UTXOs available, mining more blocks...");
-        rpc.generate_to_address(100, &funding_addr.clone().assume_checked())?;
+    if unspent.is_empty() || unspent[0].amount.to_btc() < 1.0 {
+        println!("❌ Need larger UTXOs, mining more blocks...");
+        rpc.generate_to_address(100, &funding_addr)?;
         return Ok(());
     }
 
@@ -61,31 +61,35 @@ pub async fn run_demo() -> Result<()> {
 
     // Calculate reasonable amounts based on UTXO size
     let utxo_amount = utxo.amount.to_btc();
-    let send_amount = utxo_amount - 0.001; // Leave 0.001 BTC fee
-    let replacement_amount = utxo_amount - 0.01; // Leave 0.01 BTC fee (10x higher)
+    let fee1 = 0.0001; // Low fee
+    let fee2 = 0.001;  // High fee (10x higher)
+    let send_amount1 = utxo_amount - fee1;
+    let send_amount2 = utxo_amount - fee2;
 
-    println!("💡 Will send {} BTC (0.001 fee), then {} BTC (0.01 fee)\n", send_amount, replacement_amount);
+    println!("💡 Will send {} BTC (fee: {}), then {} BTC (fee: {})\n", 
+             send_amount1, fee1, send_amount2, fee2);
 
     /////////////////////////
     /// First Transaction ///
     /////////////////////////
     println!("📝 STEP 1: Creating original transaction");
     println!("   ├─ UTXO: {}:{}", utxo.txid, utxo.vout);
-    println!("   ├─ Send: {} BTC (small fee)", send_amount);
-    println!("   ├─ Fee: LOW");
+    println!("   ├─ Send: {} BTC", send_amount1);
+    println!("   ├─ Fee: {} BTC (low)", fee1);
     println!("   └─ RBF: ENABLED\n");
 
-    // Create raw transaction spending specific UTXO
+    // Create inputs with RBF sequence
     let inputs = vec![bitcoincore_rpc::json::CreateRawTransactionInput {
         txid: utxo.txid,
         vout: utxo.vout,
-        sequence: Some(0xfffffffd), // RBF enabled! Note: this likely *isn't* needed anymore
+        sequence: Some(0xfffffffd), // RBF enabled
     }];
 
+    // Create outputs
     let mut outputs = HashMap::new();
-    outputs.insert(target_addr.clone().assume_checked().to_string(), Amount::from_btc(send_amount)?);
+    outputs.insert(target_addr.to_string(), Amount::from_btc(send_amount1)?);
 
-    // Create raw transaction (don't use fund_raw_transaction to avoid auto-fee)
+    // Create raw transaction
     let raw_tx1 = rpc.create_raw_transaction(&inputs, &outputs, None, Some(true))?;
     let signed_tx1 = rpc.sign_raw_transaction_with_wallet(&raw_tx1, None, None)?;
 
@@ -111,15 +115,15 @@ pub async fn run_demo() -> Result<()> {
     //////////////////////////
     println!("📝 STEP 2: Creating REPLACEMENT transaction");
     println!("   ├─ SAME UTXO: {}:{}", utxo.txid, utxo.vout);
-    println!("   ├─ Send: {} BTC (higher fee)", replacement_amount);
-    println!("   ├─ Fee: HIGH");
+    println!("   ├─ Send: {} BTC", send_amount2);
+    println!("   ├─ Fee: {} BTC (10x higher)", fee2);
     println!("   └─ RBF: ENABLED\n");
 
-    // Create replacement with SAME inputs but MUCH higher fee (much less output)
+    // Create replacement with SAME inputs but higher fee
     let mut replacement_outputs = HashMap::new();
-    replacement_outputs.insert(target_addr.clone().assume_checked().to_string(), Amount::from_btc(replacement_amount)?);
+    replacement_outputs.insert(target_addr.to_string(), Amount::from_btc(send_amount2)?);
 
-    let raw_tx2 = rpc.create_raw_transaction(&inputs, &replacement_outputs, None, Some(true))?; // SAME inputs!
+    let raw_tx2 = rpc.create_raw_transaction(&inputs, &replacement_outputs, None, Some(true))?;
     let signed_tx2 = rpc.sign_raw_transaction_with_wallet(&raw_tx2, None, None)?;
 
     // Broadcast replacement transaction
@@ -152,7 +156,7 @@ pub async fn run_demo() -> Result<()> {
     std::io::stdin().read_line(&mut input)?;
 
     println!("⛏️  Mining block...");
-    let blocks = rpc.generate_to_address(1, &funding_addr.clone().assume_checked())?;
+    let blocks = rpc.generate_to_address(1, &funding_addr)?;
     
     // Check what actually got confirmed
     let block = rpc.get_block(&blocks[0])?;
