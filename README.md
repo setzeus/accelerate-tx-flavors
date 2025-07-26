@@ -24,7 +24,7 @@ This demo showcases three different methods for accelerating Bitcoin transaction
 ### 1. Start Bitcoin Core in Regtest Mode
 
 ```bash
-bitcoind -regtest -daemon -rpcuser=user -rpcpassword=pass -fallbackfee=0.0001 -acceptnonstdtxn=1 -mempoolfullrbf=1
+bitcoind -regtest -daemon -rpcuser=user -rpcpassword=pass -fallbackfee=0.0001 -acceptnonstdtxn=1
 ```
 
 **Flag explanations:**
