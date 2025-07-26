@@ -38,7 +38,7 @@ bitcoind -regtest -daemon -rpcuser=user -rpcpassword=pass -fallbackfee=0.0001 -a
 ### 2. Clone and Build
 
 ```bash
-git clone [your-repo-url]
+git clone
 cd accelerate-txs-demo
 cargo build
 ```
