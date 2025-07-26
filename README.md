@@ -39,7 +39,7 @@ bitcoind -regtest -daemon -rpcuser=user -rpcpassword=pass -fallbackfee=0.0001 -a
 
 ```bash
 git clone
-cd accelerate-txs-demo
+cd accelerate-txs-flavors
 cargo build
 ```
 
