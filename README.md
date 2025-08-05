@@ -10,6 +10,9 @@ This demo showcases three different methods for accelerating Bitcoin transaction
 2. **CPFP (Child-Pays-for-Parent)** - Create a high-fee child transaction to accelerate the parent
 3. **P2A (Pay-to-Anchor/Ephemeral Anchors)** - Use anyone-can-spend anchors for fee acceleration
 
+## Presentation
+https://gamma.app/docs/Acceleration-Flavors-282iq6bvx0jcepb?mode=doc
+
 ## Prerequisites
 
 - **Rust** (latest stable version)
